@@ -6,20 +6,37 @@ const { attachGame } = require('./engine/session.cjs');
 const { discoverGames } = require('./engine/content.cjs');
 const { prepareGame } = require('./engine/mounts.cjs');
 const { deployFtp, readImage } = require('./engine/ftp.cjs');
+const { resolveRun } = require('./engine/run-directory.cjs');
 
-const USAGE = 'Usage: node poundcake.cjs <run-directory> [title-id] [--port 2121]\n' +
+const USAGE = 'Usage: node ouncecake.cjs <run-directory> [title-id] [--port 2121] [--base-only] [--check]\n' +
+              '   or: node ouncecake.cjs --ns2jb <host-folder> [title-id] [--port 2121] [--base-only] [--check]\n' +
               'Use the run dir given by ns2jb (Run folder: <whatever>)\n' +
+              '--ns2jb selects the single live RPC run created by NS2JB-RPC.cmd.\n' +
+              '--check only checks the run files and local bridge status.\n' +
+              '--base-only mounts only /base/romfs and /base/exefs; excludes updates and DLC.\n' +
               'You can also provide a title ID to skip the selection menu and just mount a specific game\n';
 
 function getArgs(argv) {
   const args = [];
   let port = 2121;
+  let ns2jb;
+  let check = false;
+  let baseOnly = false;
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
 
     if (a === '--help') {
       return { help: true };
+    }
+
+    if (a === '--check') { check = true; continue; }
+    if (a === '--base-only') { baseOnly = true; continue; }
+    if (a === '--ns2jb') {
+      const folder = argv[++i];
+      if (!folder || folder.startsWith('--') || ns2jb) throw Error('--ns2jb requires one host folder');
+      ns2jb = path.resolve(folder);
+      continue;
     }
 
     if (a === '--port') {
@@ -37,6 +54,10 @@ function getArgs(argv) {
     args.push(a);
   }
 
+  if (ns2jb) {
+    if (args.length > 1) throw Error(USAGE);
+    return { ns2jb, title: args.length ? titleId(args[0]) : undefined, port, check, baseOnly };
+  }
   if (args.length < 1 || args.length > 2) {
     throw new Error(USAGE);
   }
@@ -46,7 +67,7 @@ function getArgs(argv) {
   }
 
   const title = args.length === 2 ? titleId(args[1]) : undefined;
-  return { run: path.resolve(args[0]), title, port };
+  return { run: path.resolve(args[0]), title, port, check, baseOnly };
 }
 
 const storageNames = { 2: 'Game card', 4: 'Internal', 5: 'SD' };
@@ -110,14 +131,53 @@ async function pickGame(games, signal) {
   }
 }
 
+async function waitForStop(signal, stop) {
+  if (signal.aborted) return;
+  let rl;
+  let finished;
+  const stopped = new Promise(resolve => { finished = resolve; });
+  const line = value => { if (/^q(?:uit)?$/i.test(value.trim())) stop(); };
+  signal.addEventListener('abort', finished, { once: true });
+  // The FTP thread runs on the console. Keep its owner alive even after stdin
+  // reaches EOF; a pending Promise and signal listeners do not keep Node alive.
+  const keepAlive = setInterval(() => {}, 1000);
+  try {
+    const input = process.stdin;
+    const output = process.stdout;
+    if (input && typeof input.on === 'function' && !input.destroyed && !input.readableEnded) {
+      rl = createInterface({ input, output, terminal: Boolean(input.isTTY && output?.isTTY) });
+      rl.on('line', line);
+      rl.on('SIGINT', stop);
+    }
+    if (!signal.aborted) await stopped;
+  } finally {
+    clearInterval(keepAlive);
+    signal.removeEventListener('abort', finished);
+    if (rl) {
+      rl.removeListener('line', line);
+      rl.removeListener('SIGINT', stop);
+      rl.close();
+    }
+  }
+}
+
 async function main(argv = process.argv.slice(2)) {
   const options = getArgs(argv);
   if (options.help) {
     console.log(USAGE);
     return;
   }
+  const run = await resolveRun(options);
+  console.log('Run folder: ' + run);
+  if (options.check) {
+    console.log('Connection check passed: local RPC is ready; no game was mounted.');
+    return;
+  }
+  if (options.baseOnly) {
+    console.log('Base-only mode: only /base/romfs and /base/exefs; updates and DLC are excluded.');
+  }
   const image = await readImage();
-  const { port, run } = options;
+  const { port } = options;
   let { title } = options;
   const cancellation = new AbortController();
   const stop = () => cancellation.abort();
@@ -133,19 +193,17 @@ async function main(argv = process.argv.slice(2)) {
       if (!selected || shouldStop()) return;
       title = selected.title;
     }
-    const prepared = await prepareGame({ attachment, title, shouldStop });
+    const prepared = await prepareGame({ attachment, title, shouldStop, baseOnly: options.baseOnly });
     if (shouldStop()) return;
     server = await deployFtp({ attachment, image, ...prepared, port });
     console.log('FTP up! ftp://<switch 2 ip>:' + port);
-    console.log('Ctrl-C to stop the server');
-    
-    while (!shouldStop()) {
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-    }
+    console.log('Type q or quit and press Enter (or Ctrl-C) to stop. Wait for "Stopped" before closing NS2JB-RPC.');
+    await waitForStop(cancellation.signal, stop);
   }, () => server?.close(), () => attachment?.close(), () => {
     process.removeListener('SIGINT', stop);
     process.removeListener('SIGTERM', stop);
   });
+  if (server) console.log('Stopped. OunceCake FTP and its resources are closed; you may now stop NS2JB-RPC.');
 }
 
 if (require.main === module) {

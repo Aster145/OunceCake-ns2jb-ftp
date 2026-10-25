@@ -2,6 +2,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { success, idBytes, resultError, cleanup, withCleanup } = require('./protocol.cjs');
+const { readFsGlobalPointer } = require('./fs-globals.cjs');
 
 const ptr = (bytes, at = 0) => Number(bytes.readBigUInt64LE(at));
 const u32 = (value) => { const bytes = Buffer.alloc(4); bytes.writeUInt32LE(value); return bytes; };
@@ -29,14 +30,9 @@ function candidates(bytes, layout) {
 }
 
 async function findRegistryInterface({ memory, layout }) {
-  const text = layout.rootVptr - 0x2b1420;
-
   const row = candidates(await memory.read(layout.table, layout.count * 0x30), layout);
-  const domain = await memory.read(row.domain, 0x20);
+  if (!row) throw new Error('The current FS layout has no program registry interface');
   const header = await memory.read(row.object, 0x18);
-
-  const allowed = await memory.read(text + 0x11e1208, 16);
-  const caller = header.readBigUInt64LE(8);
   return {
     ...row,
     identity: header.subarray(0, 16).toString('hex'),
@@ -151,54 +147,22 @@ function accessControls(bytes, title) {
   return { fah, fac };
 }
 
-async function registryReader(a) {
+async function fsContext(a) {
   const engine = path.join(a.run, 'switch2');
   const layout = JSON.parse(await fs.readFile(path.join(engine, 'ro', a.live.session + '-layout.json')));
   const memory = await require(path.join(engine, 'tools/fs-memory.cjs')).connect();
-
-  const text = layout.rootVptr - 0x2b1420;
-  // make sure memory layout is what we expect BEFORE we fuck with it.
-
-  const manager = await memory.pointer(text + 0x11e12d0);
-  const head = manager + 0x10;
-
-  async function entries() {
-    const rows = [];
-    const seen = new Set();
-    let node = await memory.pointer(head + 8);
-
-    while (node !== head) {
-      seen.add(node);
-
-      const pair = await memory.read(node, 0x20);
-      const info = Number(pair.readBigUInt64LE(0x10));
-      const b = await memory.read(info, 0x18);
-      rows.push({
-        info,
-        owner: b.readBigUInt64LE().toString(),
-        title: b.readBigUInt64LE(8).toString(16).padStart(16, '0'),
-        storage: b[16],
-      });
-      node = Number(pair.readBigUInt64LE(8));
-    }
-
-    return rows;
-  }
-
-  return { memory, layout, entries };
+  return { memory, layout };
 }
 
 // your romfs. hand it over.
 async function openProgramRomfs({ attachment: a, title, storage, policy }) {
   const controls = accessControls(policy, title);
-  const reader = await registryReader(a);
+  const reader = await fsContext(a);
   // random ID for telling the system "look this very real process that's totally the game wants data"
   const owner = 0xf000000000000000n | BigInt('0x' + crypto.randomBytes(7).toString('hex'));
   let reference;
-  let attempted = false;
-  let entry;
+  let registered = false;
   return withCleanup(async () => {
-    const before = await reader.entries();
     reference = await copyProgramRegistry({ attachment: a, reader });
     await a.s.write(a.s.base + 0x8000, controls.fah);
     await a.s.write(a.s.base + 0xc000, controls.fac);
@@ -208,20 +172,19 @@ async function openProgramRomfs({ attachment: a, title, storage, policy }) {
     idBytes(title).copy(input, 16);
     input.writeBigUInt64LE(BigInt(controls.fah.length), 24);
     input.writeBigUInt64LE(BigInt(controls.fac.length), 32);
-    attempted = true;
     success(await a.s.ipc('Register owned temporary program context', reference.handle, 0, input, {
       send: [
         { address: a.s.base + 0x8000, size: controls.fah.length, mode: 0 },
         { address: a.s.base + 0xc000, size: controls.fac.length, mode: 0 },
       ],
     }), 'Register owned temporary program context');
-    const rows = (await reader.entries()).filter((row) => row.owner === owner.toString());
-    entry = rows[0];
+    // Native registration establishes this owned context. The old global
+    // registry-list offset points into an aliased stack on the supplied FS.
+    registered = true;
     return openCurrentProgramRomfs({ attachment: a, reader, owner });
   }, async () => {
-    if (!attempted) return;
-    const rows = (await reader.entries()).filter((row) => row.owner === owner.toString());
-    if (!rows.length) return;
+    // Only undo an acknowledged registration; never replay an uncertain IPC.
+    if (!registered) return;
     success(await a.s.ipc('Remove owned temporary program context', reference.handle, 1, u64(owner)),
       'Remove owned temporary program context');
   }, () => reference?.close());
@@ -317,11 +280,8 @@ function mapBytes(rows) {
 }
 
 async function programMapReader(attachment) {
-  const { memory, layout } = await registryReader(attachment);
-  const text = layout.rootVptr - 0x2b1420;
-  // reading these from fs makes the switch 2 lock up, get it from vtable
-
-  const manager = await memory.pointer(text + 0x11e11d8);
+  const { memory, layout } = await fsContext(attachment);
+  const manager = await readFsGlobalPointer(attachment, layout, 0x11e11d8, 'FS program index map');
   const head = manager + 0x50;
 
   async function entries() {

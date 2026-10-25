@@ -1,11 +1,17 @@
 {
-  "name": "OunceCake",
+  "name": "ouncecake-ns2jb-ftp",
   "version": "1.0.0",
   "private": true,
-  "description": "Tool to dump unencrypted romFS and exeFS for Switch 2 games",
+  "description": "Windows ns2jb-ftp adaptation of OunceCake with an RPC-only host and console-side read-only FTP",
+  "license": "GPL-2.0-only",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Aster145/OunceCake-ns2jb-ftp.git"
+  },
   "engines": {"node": ">=22"},
   "scripts": {
     "start": "node ouncecake.cjs",
+    "test": "node --test test/*.test.cjs",
     "build": "node engine/build-ftp.cjs"
   }
 }

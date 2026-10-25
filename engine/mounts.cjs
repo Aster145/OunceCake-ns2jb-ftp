@@ -451,7 +451,7 @@ function buildIndex(views) {
   return bytes;
 }
 
-async function prepareGame({ attachment: a, title, shouldStop = () => false }) {
+async function prepareGame({ attachment: a, title, shouldStop = () => false, baseOnly = false }) {
   const views = [];
   const sources = [];
   const absentSources = [];
@@ -525,6 +525,7 @@ async function prepareGame({ attachment: a, title, shouldStop = () => false }) {
           !error.source.selection
         ) {
           absentSources.push(error.source);
+          console.log('Skipped ' + prefix + '/' + section + ': selected base content has no RomFS partition.');
           return { source: error.source };
         }
 
@@ -544,6 +545,9 @@ async function prepareGame({ attachment: a, title, shouldStop = () => false }) {
             return files.read(mounted, offset, length);
           }, mounted.size)
         : await filesystemEntries(mounted);
+    const fileCount = entries.filter((item) => item.type === 'file').length;
+    console.log('Mounted ' + prefix + '/' + section + ': ' + fileCount + ' files, ' +
+      (entries.length - fileCount) + ' directories.');
     const mount = sources.length;
     const deferred = mounted.source.selection === 'dlc';
 
@@ -582,10 +586,10 @@ async function prepareGame({ attachment: a, title, shouldStop = () => false }) {
 
   cancelled();
 
-  const updates = await discoverUpdates({ ...a, title });
+  const updates = baseOnly ? [] : await discoverUpdates({ ...a, title });
   cancelled();
 
-  const dlc = await discoverDlc({ ...a, title });
+  const dlc = baseOnly ? [] : await discoverDlc({ ...a, title });
   const installed = [4, 5, 2].map((storage) => ({ storage }));
   const base = await mountView('/base', 'romfs', installed, true);
   await mountView(
@@ -618,6 +622,18 @@ async function prepareGame({ attachment: a, title, shouldStop = () => false }) {
     }));
     await mountView(prefix, 'romfs', candidates);
   }
+
+  const fileCount = views.reduce((total, view) =>
+    total + view.entries.filter((item) => item.type === 'file').length, 0);
+  if (!fileCount) {
+    const detail = baseOnly
+      ? 'Base-only mode excludes downloaded update content. A game-key card may have no game files in its base content. Use full mode (OUNCECAKE-START.cmd) to include updates; update mounting must succeed first.'
+      : 'All mounted game directories are empty. Check the selected content and mount results above.';
+    throw Object.assign(new Error('No downloadable game files found; FTP was not started. ' + detail), {
+      code: 'GAME_FILES_EMPTY',
+    });
+  }
+  console.log('Prepared ' + fileCount + ' downloadable files.');
 
   const ncm = await a.service('ncm');
   const pinned = new Set();

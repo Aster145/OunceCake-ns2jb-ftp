@@ -3,3 +3,7 @@ runs/
 dumps/
 connection.json
 *.log
+ns2jb-host/
+connect.txt
+rpc-ready.json
+*.zip

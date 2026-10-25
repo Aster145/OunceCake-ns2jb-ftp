@@ -207,6 +207,7 @@ async function deployFtp({ attachment: a, image, index, sources, port }) {
   work.record = async () => {};
 
   let worker;
+  let threadMayRun = false;
   let ro;
   let pid;
   let mappings = [];
@@ -234,6 +235,9 @@ async function deployFtp({ attachment: a, image, index, sources, port }) {
   }
 
   async function close() {
+    if (threadMayRun && !worker) {
+      throw new Error('FTP thread startup outcome is unknown; resources are retained. Restart the console.');
+    }
     if (worker) {
       await work.write(work.base + 0x400c, Buffer.from([1, 0, 0, 0]));
 
@@ -247,22 +251,32 @@ async function deployFtp({ attachment: a, image, index, sources, port }) {
         await new Promise((r) => setTimeout(r, 50));
       }
 
+      if (!stopped) {
+        throw new Error('FTP thread did not stop; resources are retained. Restart the console.');
+      }
       const joined = await work.rpc.call3(a.live.sdk + threadCode.join.offset, worker, work.base + 0xa008, 0);
+      if (joined) {
+        throw new Error('Could not join FTP thread: ' + joined + '; resources are retained. Restart the console.');
+      }
       work.threads.delete(worker);
       a.s.threads.delete('standalone-ftp');
       worker = undefined;
+      threadMayRun = false;
     }
 
-    await cleanup([
-      ...mappings.slice().reverse().map((mapping) => () =>
-        roRequest(0x524f0013, [pid, mapping.source, mapping.destination, 4096])),
-      () => work.cleanup(),
-    ]);
-    mappings = [];
+    while (mappings.length) {
+      const mapping = mappings[mappings.length - 1];
+      await roRequest(0x524f0013, [pid, mapping.source, mapping.destination, 4096]);
+      mappings.pop();
+    }
+    await work.cleanup();
   }
 
   try {
     await work.initialize();
+    for (const [name, expected] of Object.entries({ ...threadCode, ...sdk })) {
+      await work.verifyCode(expected, 'FTP ' + name);
+    }
 
     const symbols = await resolveSdkFunctions({
       read: work.read.bind(work),
@@ -306,10 +320,15 @@ async function deployFtp({ attachment: a, image, index, sources, port }) {
       pid: true,
       copies: [0xffff8001],
     });
+    if (reply.result) throw resultError('FTP verify application process', reply.result);
 
     pid = reply.data.readBigUInt64LE().toString();
 
     const destination = Number(reply.data.readBigUInt64LE(88));
+    if (BigInt(pid) <= 0n || !Number.isSafeInteger(destination) || destination <= 0 ||
+        destination % 4096 !== 0 || destination + codeBytes > 2 ** 39) {
+      throw new Error('RO returned an invalid FTP process or code mapping address');
+    }
 
     for (let offset = 0; offset < codeBytes; offset += 4096) {
       const source = work.base + 0x10000 + offset;
@@ -319,6 +338,8 @@ async function deployFtp({ attachment: a, image, index, sources, port }) {
     }
 
     a.s.threads.add('standalone-ftp');
+    work.threads.add('starting-ftp');
+    threadMayRun = true;
 
     const started = await work.rpc.call4(
       a.live.sdk + threadCode.create.offset,
@@ -330,11 +351,18 @@ async function deployFtp({ attachment: a, image, index, sources, port }) {
 
     if (started) {
       a.s.threads.delete('standalone-ftp');
+      work.threads.delete('starting-ftp');
+      threadMayRun = false;
       throw new Error('Could not start FTP thread: ' + started);
     }
 
     worker = Number((await work.readOwned(work.base + 0xa000, 8)).readBigUInt64LE());
+    if (!Number.isSafeInteger(worker) || worker <= 0) {
+      worker = undefined;
+      throw new Error('FTP thread reference is unavailable');
+    }
     work.threads.add(worker);
+    work.threads.delete('starting-ftp');
 
     const until = Date.now() + 10000;
     let current = { state: 0 };
@@ -350,6 +378,7 @@ async function deployFtp({ attachment: a, image, index, sources, port }) {
 
       await new Promise((r) => setTimeout(r, 50));
     }
+    if (current.state !== 1) throw new Error('Native FTP startup timed out before the server became ready');
 
     return { close };
   } catch (error) {
