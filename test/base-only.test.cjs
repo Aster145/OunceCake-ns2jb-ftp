@@ -227,7 +227,7 @@ test('main passes base-only to preparation and explains exclusions before mounti
 
 test('base launcher selects base-only and help documents both CLI forms', async () => {
   const launcher = fs.readFileSync(path.join(__dirname, '..', 'OUNCECAKE-BASE.cmd'), 'utf8');
-  assert.match(launcher, /--ns2jb "%~dp0ns2jb-host" --base-only %\*/);
+  assert.match(launcher, /--ns2jb "%OUNCECAKE_NS2JB_HOST%" --base-only %\*/);
   const messages = [];
   const cli = loadModule('ouncecake.cjs', {}, { console: { log: value => messages.push(value) } });
   await cli.main(['--help']);

@@ -14,16 +14,29 @@ node .\prepare-ns2jb.cjs "C:\path\to\ns2jb-ftp"
 
 Git clone 后必须执行此步骤；`ns2jb-host` 不包含在公开仓库中。仓库提供 `native.bin` 及其源码，普通运行不需要重新编译。只有修改 `native.c` / `native.h` 时，才需使用 Linux 上的 AArch64 GCC / binutils；当前构建脚本不支持 Windows。
 
-## 每次运行
+所有启动脚本默认使用项目根目录下的 `ns2jb-host`。已有兼容宿主环境时，可通过以下任一方式指定，环境变量优先：
+
+- 设置环境变量 `OUNCECAKE_NS2JB_HOST`，值为宿主目录的完整路径。
+- 在项目根目录新建 `LOCAL-HOST-PATH.txt`，第一行写入宿主目录的完整路径，不加引号。
+
+`LOCAL-HOST-PATH.txt` 是 Git 忽略的本地配置。使用另一目录的宿主时，`Run folder` 指向那个目录属于正常现象；卡带模式是否启动，以 `Card-partition mode` 提示为准。
+
+## 建立新会话并运行
+
+已有正常运行且显示 `RPC ready:` 的会话时，可直接从第 4 步启动 OunceCake；切换模式时按下节说明停止旧实例。
 
 1. 重启 Switch 2，打开 SmileBASIC，进入 Direct 模式，使用已保存的 NS2 bootstrap。
 2. 双击 **`NS2JB-RPC.cmd`**，选择主机能访问的**电脑局域网 IP**。按终端提示在 SmileBASIC 执行命令及本次 `V=START(...)`。`REMOVE` 每次应用进程只执行一次；失败后先重启主机再重新开始。
 3. 等待 **`RPC ready:`**。保留 RPC 窗口与 SmileBASIC。
-4. 双击 **`OUNCECAKE-START.cmd`**。程序自动选择该独立环境中唯一有效的 RPC 会话，显示游戏列表；输入编号后等待 **`FTP up!`**。
+4. 选择所需模式：**`OUNCECAKE-START.cmd`** 显示游戏列表，输入编号；**`OUNCECAKE-CARD-PARTITIONS.cmd`** 或 **`启动卡带全分区导出.cmd`** 直接读取当前实体卡。程序自动选择宿主环境中唯一有效的 RPC 会话，等待 **`FTP up!`**。
 5. FTP 客户端连接 **Switch 2 的局域网 IP，端口 2121**，使用普通 FTP、匿名登录。这里填写的是主机地址，不是电脑地址或 `127.0.0.1`。
 6. 先在 OunceCake 窗口输入 **`q`** 并回车，等待 **`Stopped`**；再在 RPC 窗口输入 **`q`** 并回车，等待清理完成。OunceCake 也支持 `quit` 和 Ctrl+C。结束使用后可重启主机。
 
 两个窗口只有一个 FTP：RPC 初始连接使用 TCP **39380**，游戏下载使用主机端 FTP **2121**。Windows 防火墙询问时，允许 Node.js 使用连接主机的专用网络。启动器不会通过 USB 自动输入 SmileBASIC 命令。
+
+### 保留 RPC 切换模式
+
+先停止 FTP 下载，在当前 OunceCake 窗口输入 `q`，等到 `Stopped` 后关闭该窗口。保留 RPC 窗口和 SmileBASIC，启动另一个 OunceCake 入口，再让 FTP 客户端断开重连并回到根目录。正常会话切换无需重启主机；不要直接关闭运行中的 OunceCake 窗口，也不要同时运行两个实例。
 
 ## 完整模式与仅本体模式
 
@@ -32,6 +45,23 @@ Git clone 后必须执行此步骤；`ns2jb-host` 不包含在公开仓库中。
 钥匙卡游戏的本体内容可能没有 RomFS，ExeFS 也可能为空。程序会报告每个挂载的文件数和跳过的分区；总文件数为 0 时停止，不会启动空 FTP。仅本体模式不能代替下载内容的挂载。
 
 当前实测的 Pokémon Pokopia 应使用完整模式：可下载内容位于 `/updates/655360/romfs` 与 `/updates/655360/exefs`，其 `/base/exefs` 为空，本体 RomFS 不存在。这是本次设备内容的观察结果，不代表所有游戏；完整验证范围见 [验证记录](docs/VALIDATION.md)。
+
+## 卡带分区模式
+
+插入实体卡并保持连接，运行 `OUNCECAKE-CARD-PARTITIONS.cmd`；中文入口 `启动卡带全分区导出.cmd` 调用同目录的这个脚本。此模式不显示游戏选择列表，启动时会输出 `Card-partition mode`。
+
+| FTP 路径 | 内容 |
+| --- | --- |
+| `/card/update` | 卡带系统更新分区中的文件 |
+| `/card/normal` | Normal 分区中的文件，可能为空 |
+| `/card/secure` | Secure 分区中的游戏内容容器等文件 |
+| `/card/logo` | Logo 分区中的文件 |
+
+游戏的 RomFS / ExeFS 位于内容容器内部，与卡带的四类分区处于不同层级。旧模式的 `/updates` 是游戏补丁；它不等于 `/card/update`。这项功能导出逻辑分区中的文件，不生成包含外层头部、卡带证书、填充区的完整 XCI。
+
+等待 `FTP up!` 后，用 FTP 客户端下载所需目录。启动器仅准备文件列表并提供读取服务；已下载过游戏内容时，无需再次下载 Secure。准备结果写入 `reports/card-partitions-*.json`，记录可访问、缺失、空分区或失败状态；报告不会把准备成功标成已下载完成。`not-attempted` 表示尚未尝试读取，不能据此判断分区不存在。
+
+卡带模式使用当前插卡路径打开逻辑文件系统，不在准备期间写入卡带。运行期间不要更换卡带。特定分区的可访问性和内容仍取决于设备环境及实体卡，详情见 [验证记录](docs/VALIDATION.md)。
 
 ## 可选命令
 
@@ -45,6 +75,12 @@ node .\ouncecake.cjs --ns2jb .\ns2jb-host --check
 
 ```powershell
 node .\ouncecake.cjs --ns2jb .\ns2jb-host --base-only
+```
+
+卡带分区模式，不与游戏 Title ID 或 `--base-only` 同时使用：
+
+```powershell
+node .\ouncecake.cjs --ns2jb .\ns2jb-host --card-partitions
 ```
 
 直接指定终端显示的 `Run folder`，也兼容原上游保持的 RPC 会话：
@@ -68,10 +104,12 @@ Title ID 仅为格式示例，需换成实际游戏的 ID。多个有效 RPC 会
 | `No RPC runs found` | 先运行 `NS2JB-RPC.cmd`，等到 `RPC ready:`；确认使用本仓库生成的运行环境。 |
 | `Opening /updates/...` | 正在准备内容，尚未启动 FTP；等待完成或明确报错。 |
 | `FTP up!` | FTP 已就绪，仍需用客户端下载文件，不代表导出完成。 |
+| 仍显示 `/base`、`/updates`、`/dlc` | 当前为游戏内容模式。正常停止后运行卡带入口，确认出现 `Card-partition mode`，再让 FTP 客户端断开重连。 |
+| 卡带分区状态为 `not-attempted` | 读取尚未进行；检查后续错误和报告，不能把它视作分区为空。 |
 | 本体无 RomFS、ExeFS 为空 | 所选本体没有可下载文件；使用完整模式查看可用更新内容。 |
 | `Unsupported ns2jb ...` | 来源代码与准备工具要求的版本不匹配；需提供兼容的 Windows `ns2jb-ftp` 包。 |
 | `Memory request timed out` / `Console response timed out` | 当前会话不能视为健康；先停止 OunceCake，再按 RPC 的提示重启主机并建立新会话，不重复使用旧会话。 |
 | `resources are retained` | 未能确认线程已停止；按提示重启主机，不继续正常的资源清理流程。 |
 | 电脑窗口已退出，但旧 FTP 仍可连接 | 设备端服务仍在运行。重启 Switch 2 清除后重新建立 RPC；再次启动 OunceCake 可能因端口占用失败。 |
 
-不要把完整模式卡在准备阶段、FTP 空目录或仅完成文件列表读取当成游戏导出成功。
+不要把准备阶段、FTP 空目录或仅完成文件列表读取当成文件导出成功。

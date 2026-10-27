@@ -5,6 +5,8 @@ const { titleId, withCleanup } = require('./engine/protocol.cjs');
 const { attachGame } = require('./engine/session.cjs');
 const { discoverGames } = require('./engine/content.cjs');
 const { prepareGame } = require('./engine/mounts.cjs');
+const { prepareCardPartitions } = require('./engine/card-partitions.cjs');
+const { saveCardReport } = require('./engine/card-report.cjs');
 const { deployFtp, readImage } = require('./engine/ftp.cjs');
 const { resolveRun } = require('./engine/run-directory.cjs');
 
@@ -14,6 +16,7 @@ const USAGE = 'Usage: node ouncecake.cjs <run-directory> [title-id] [--port 2121
               '--ns2jb selects the single live RPC run created by NS2JB-RPC.cmd.\n' +
               '--check only checks the run files and local bridge status.\n' +
               '--base-only mounts only /base/romfs and /base/exefs; excludes updates and DLC.\n' +
+              '--card-partitions exports inserted-card Update/Normal/Secure/Logo files; no title ID.\n' +
               'You can also provide a title ID to skip the selection menu and just mount a specific game\n';
 
 function getArgs(argv) {
@@ -22,6 +25,7 @@ function getArgs(argv) {
   let ns2jb;
   let check = false;
   let baseOnly = false;
+  let cardPartitions = false;
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -32,6 +36,7 @@ function getArgs(argv) {
 
     if (a === '--check') { check = true; continue; }
     if (a === '--base-only') { baseOnly = true; continue; }
+    if (a === '--card-partitions') { cardPartitions = true; continue; }
     if (a === '--ns2jb') {
       const folder = argv[++i];
       if (!folder || folder.startsWith('--') || ns2jb) throw Error('--ns2jb requires one host folder');
@@ -56,7 +61,8 @@ function getArgs(argv) {
 
   if (ns2jb) {
     if (args.length > 1) throw Error(USAGE);
-    return { ns2jb, title: args.length ? titleId(args[0]) : undefined, port, check, baseOnly };
+    if (cardPartitions && (baseOnly || args.length)) throw Error('--card-partitions cannot be combined with --base-only or a title ID');
+    return { ns2jb, title: args.length ? titleId(args[0]) : undefined, port, check, baseOnly, cardPartitions };
   }
   if (args.length < 1 || args.length > 2) {
     throw new Error(USAGE);
@@ -67,10 +73,19 @@ function getArgs(argv) {
   }
 
   const title = args.length === 2 ? titleId(args[1]) : undefined;
-  return { run: path.resolve(args[0]), title, port, check, baseOnly };
+  if (cardPartitions && (baseOnly || title)) throw Error('--card-partitions cannot be combined with --base-only or a title ID');
+  return { run: path.resolve(args[0]), title, port, check, baseOnly, cardPartitions };
 }
 
 const storageNames = { 2: 'Game card', 4: 'Internal', 5: 'SD' };
+
+function printCardPartitions(partitions) {
+  for (const partition of partitions) {
+    console.log('/card/' + partition.name + ': ' + partition.status +
+      ' | files=' + (partition.files ?? 0) + ' | bytes=' + (partition.bytes ?? 0) +
+      (partition.error ? ' | ' + partition.error : ''));
+  }
+}
 
 function gameMenu(games) {
   const width = String(games.length).length;
@@ -176,6 +191,10 @@ async function main(argv = process.argv.slice(2)) {
   if (options.baseOnly) {
     console.log('Base-only mode: only /base/romfs and /base/exefs; updates and DLC are excluded.');
   }
+  if (options.cardPartitions) {
+    console.log('Card-partition mode: read-only Update / Normal / Secure / Logo files from the inserted card.');
+    console.log('This exposes partition files, not a byte-identical XCI image.');
+  }
   const image = await readImage();
   const { port } = options;
   let { title } = options;
@@ -188,12 +207,29 @@ async function main(argv = process.argv.slice(2)) {
   await withCleanup(async () => {
     attachment = await attachGame(run);
     const shouldStop = () => cancellation.signal.aborted;
-    if (!title) {
+    if (!options.cardPartitions && !title) {
       const selected = await pickGame(await discoverGames({ ...attachment, shouldStop }), cancellation.signal);
       if (!selected || shouldStop()) return;
       title = selected.title;
     }
-    const prepared = await prepareGame({ attachment, title, shouldStop, baseOnly: options.baseOnly });
+    let prepared;
+    if (options.cardPartitions) {
+      try {
+        prepared = await prepareCardPartitions({ attachment, shouldStop });
+      } catch (error) {
+        const report = await saveCardReport({ run, partitionReport: error.partitionReport || [],
+          cardMetadata: error.cardMetadata, error: { code: error.code, message: error.message } });
+        printCardPartitions(error.partitionReport || []);
+        console.log('Card partition report: ' + report);
+        throw error;
+      }
+      const report = await saveCardReport({ run, partitionReport: prepared.partitionReport,
+        cardMetadata: prepared.cardMetadata });
+      printCardPartitions(prepared.partitionReport);
+      console.log('Card partition report: ' + report);
+    } else {
+      prepared = await prepareGame({ attachment, title, shouldStop, baseOnly: options.baseOnly });
+    }
     if (shouldStop()) return;
     server = await deployFtp({ attachment, image, ...prepared, port });
     console.log('FTP up! ftp://<switch 2 ip>:' + port);

@@ -5,12 +5,15 @@ const { success, idBytes, fixedOutput, pathRequest, resultError, withCleanup, cl
 
 const inactive = new Set([0x21005, 0x20a05]);
 
-async function discoverInstalled({ s, domain, service, title, metaType, kind }) {
+async function discoverInstalled({ s, domain, service, title, metaType, kind,
+  storages = [4, 5, 2], shouldStop = () => false }) {
   const label = metaType === 0x80 ? 'application' : metaType === 0x82 ? 'DLC' : 'update';
+  throwIfCancelled(shouldStop);
   const ncm = await service('ncm');
   const records = [];
 
-  for (const storage of [4, 5, 2]) {
+  for (const storage of storages) {
+    throwIfCancelled(shouldStop);
     let database;
 
     try {
@@ -25,6 +28,7 @@ async function discoverInstalled({ s, domain, service, title, metaType, kind }) 
         const found = new Map();
 
         async function list(min, max) {
+          throwIfCancelled(shouldStop);
           const input = Buffer.alloc(32);
           input[0] = metaType;
           idBytes(title).copy(input, 8);
@@ -46,6 +50,7 @@ async function discoverInstalled({ s, domain, service, title, metaType, kind }) 
           const count = reply.data.readInt32LE(4);
 
           const bytes = await s.readOwned(address, size);
+          throwIfCancelled(shouldStop);
 
           for (let i = 0; i < count; i++) {
             const key = bytes.subarray(i * 16, (i + 1) * 16);
@@ -91,6 +96,7 @@ async function discoverInstalled({ s, domain, service, title, metaType, kind }) 
 
         if (metaType === 0x82) {
           for (const item of found.values()) {
+            throwIfCancelled(shouldStop);
             const key = Buffer.alloc(16);
             idBytes(item.contentTitle).copy(key);
             key.writeUInt32LE(item.version, 8);
@@ -113,6 +119,7 @@ async function discoverInstalled({ s, domain, service, title, metaType, kind }) 
   records.sort(
     (a, b) => b.version - a.version || a.contentTitle.localeCompare(b.contentTitle) || a.storage - b.storage,
   );
+  throwIfCancelled(shouldStop);
   return records;
 }
 
@@ -413,6 +420,7 @@ async function discoverGames({ s, root, domain, service, filesystem, shouldStop 
 }
 
 module.exports = {
+  discoverApplications,
   discoverGames, discoverUpdates, discoverDlc,
   resolveProgramContent, resolveDlcContent, findOriginalContent,
   isInstalledUpdate, programMatchesApplication,

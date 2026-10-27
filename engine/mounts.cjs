@@ -682,4 +682,4 @@ async function prepareGame({ attachment: a, title, shouldStop = () => false, bas
   return { index: buildIndex(views), sources };
 }
 
-module.exports = { prepareGame, readRomfs, buildIndex };
+module.exports = { createGameFiles, prepareGame, readRomfs, buildIndex };

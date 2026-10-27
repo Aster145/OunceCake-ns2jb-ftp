@@ -7,3 +7,5 @@ ns2jb-host/
 connect.txt
 rpc-ready.json
 *.zip
+reports/
+LOCAL-HOST-PATH.txt
