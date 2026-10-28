@@ -374,7 +374,13 @@ function buildIndex(views) {
       checkIndex(!entries.has(filename), 'duplicate path');
       entries.add(filename);
 
-      if (view.kind === 'filesystem') checkIndex(Buffer.byteLength(item.path) <= 0x300, 'CodeFS path is too long');
+      const sourcePath = item.sourcePath ?? item.path;
+      if (view.kind === 'filesystem') {
+        checkIndex(typeof sourcePath === 'string' && sourcePath.startsWith('/') &&
+          !/[\\\0\r\n]/.test(sourcePath) &&
+          !sourcePath.split('/').some(part => part === '.' || part === '..'), 'invalid filesystem source path');
+        checkIndex(Buffer.byteLength(sourcePath) <= 0x300, 'filesystem source path is too long');
+      }
 
       checkIndex(Buffer.byteLength(filename) <= 1023 && !/[\r\n]/.test(filename), 'FTP path length or character');
 
@@ -397,7 +403,7 @@ function buildIndex(views) {
         size: item.size,
         sourcePath:
           view.kind === 'filesystem'
-            ? item.path
+            ? sourcePath
             : view.kind === 'deferred-storage'
               ? view.source.contentPath
               : '',

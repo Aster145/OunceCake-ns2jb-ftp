@@ -335,12 +335,12 @@ async function controlName({ s, root, domain, service, filesystem }, game) {
   return null;
 }
 
-async function discoverGames({ s, root, domain, service, filesystem, shouldStop = () => false }) {
+async function discoverGames({ s, root, domain, service, filesystem, applications, shouldStop = () => false }) {
   console.log("Getting games list..");
   const cancelled = () => throwIfCancelled(shouldStop);
   cancelled();
 
-  const inventory = await discoverApplications({ s, domain, service });
+  const inventory = applications ?? await discoverApplications({ s, domain, service });
   const byTitle = new Map();
 
   for (const item of inventory) {

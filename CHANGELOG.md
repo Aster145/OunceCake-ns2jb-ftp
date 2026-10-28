@@ -1,6 +1,14 @@
 # 更新记录
 
-## Unreleased — 2026-10-27
+## 2026-10-28
+
+- 新增 `--installed-nca`：从内部 User 存储按所选游戏导出完整原始 NCA，按本体、更新、DLC 和版本分组，通过现有只读 FTP 下载。
+- 新增通用游戏选择入口 `OUNCECAKE-INSTALLED-NCA.cmd` 与中文快捷脚本；保留固定选择 Pokopia 的入口。仅有内部更新或 DLC 的游戏也会出现在列表中，可通过 Title ID 跳过选单。
+- 根据安装元数据核对 NCA 路径和大小，包含 Meta 等全部内容类型；支持超过 4 GiB 的文件，生成独立下载清单。
+- 实机完整下载 Pokopia 更新包 4 个 NCA（7,300,278,272 字节），以及 SmileBASIC 4 本体与更新的 10 个 NCA（180,740,608 字节）；逐文件大小、FTP 完成响应和正常退出均通过。
+- 新增菜单、参数、元数据分页、路径映射、大小核对和失败清理测试。该入口只导出内部存储 NCA，原有 RomFS / ExeFS 和卡带模式继续保留。
+
+## 2026-10-27
 
 - 新增 `--card-partitions`，通过只读 FTP 暴露当前实体卡的 Update、Normal、Secure、Logo 逻辑分区文件；保留原游戏完整模式和仅本体模式。
 - 新增 `OUNCECAKE-CARD-PARTITIONS.cmd` 与同目录中文入口 `启动卡带全分区导出.cmd`。

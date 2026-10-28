@@ -7,6 +7,8 @@ const { discoverGames } = require('./engine/content.cjs');
 const { prepareGame } = require('./engine/mounts.cjs');
 const { prepareCardPartitions } = require('./engine/card-partitions.cjs');
 const { saveCardReport } = require('./engine/card-report.cjs');
+const { prepareInstalledNcas, discoverInstalledNcaGames } = require('./engine/installed-nca.cjs');
+const { saveInstalledNcaReport } = require('./engine/installed-nca-report.cjs');
 const { deployFtp, readImage } = require('./engine/ftp.cjs');
 const { resolveRun } = require('./engine/run-directory.cjs');
 
@@ -17,6 +19,7 @@ const USAGE = 'Usage: node ouncecake.cjs <run-directory> [title-id] [--port 2121
               '--check only checks the run files and local bridge status.\n' +
               '--base-only mounts only /base/romfs and /base/exefs; excludes updates and DLC.\n' +
               '--card-partitions exports inserted-card Update/Normal/Secure/Logo files; no title ID.\n' +
+              '--installed-nca exports raw NCA files from internal User storage; omit title ID to choose a game.\n' +
               'You can also provide a title ID to skip the selection menu and just mount a specific game\n';
 
 function getArgs(argv) {
@@ -26,6 +29,7 @@ function getArgs(argv) {
   let check = false;
   let baseOnly = false;
   let cardPartitions = false;
+  let installedNca = false;
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -37,6 +41,7 @@ function getArgs(argv) {
     if (a === '--check') { check = true; continue; }
     if (a === '--base-only') { baseOnly = true; continue; }
     if (a === '--card-partitions') { cardPartitions = true; continue; }
+    if (a === '--installed-nca') { installedNca = true; continue; }
     if (a === '--ns2jb') {
       const folder = argv[++i];
       if (!folder || folder.startsWith('--') || ns2jb) throw Error('--ns2jb requires one host folder');
@@ -59,10 +64,13 @@ function getArgs(argv) {
     args.push(a);
   }
 
+  if (installedNca && (baseOnly || cardPartitions)) {
+    throw Error('--installed-nca cannot be combined with --base-only or --card-partitions');
+  }
   if (ns2jb) {
     if (args.length > 1) throw Error(USAGE);
     if (cardPartitions && (baseOnly || args.length)) throw Error('--card-partitions cannot be combined with --base-only or a title ID');
-    return { ns2jb, title: args.length ? titleId(args[0]) : undefined, port, check, baseOnly, cardPartitions };
+    return { ns2jb, title: args.length ? titleId(args[0]) : undefined, port, check, baseOnly, cardPartitions, installedNca };
   }
   if (args.length < 1 || args.length > 2) {
     throw new Error(USAGE);
@@ -74,7 +82,7 @@ function getArgs(argv) {
 
   const title = args.length === 2 ? titleId(args[1]) : undefined;
   if (cardPartitions && (baseOnly || title)) throw Error('--card-partitions cannot be combined with --base-only or a title ID');
-  return { run: path.resolve(args[0]), title, port, check, baseOnly, cardPartitions };
+  return { run: path.resolve(args[0]), title, port, check, baseOnly, cardPartitions, installedNca };
 }
 
 const storageNames = { 2: 'Game card', 4: 'Internal', 5: 'SD' };
@@ -195,6 +203,10 @@ async function main(argv = process.argv.slice(2)) {
     console.log('Card-partition mode: read-only Update / Normal / Secure / Logo files from the inserted card.');
     console.log('This exposes partition files, not a byte-identical XCI image.');
   }
+  if (options.installedNca) {
+    console.log('Installed-NCA mode: read-only raw NCA files from internal User storage.');
+    console.log('Card and SD contents are excluded.');
+  }
   const image = await readImage();
   const { port } = options;
   let { title } = options;
@@ -208,12 +220,27 @@ async function main(argv = process.argv.slice(2)) {
     attachment = await attachGame(run);
     const shouldStop = () => cancellation.signal.aborted;
     if (!options.cardPartitions && !title) {
-      const selected = await pickGame(await discoverGames({ ...attachment, shouldStop }), cancellation.signal);
+      const games = options.installedNca
+        ? await discoverInstalledNcaGames({ attachment, shouldStop })
+        : await discoverGames({ ...attachment, shouldStop });
+      if (options.installedNca && !games.length) throw Error('No installed game content was found in internal storage.');
+      const selected = await pickGame(games, cancellation.signal);
       if (!selected || shouldStop()) return;
       title = selected.title;
     }
     let prepared;
-    if (options.cardPartitions) {
+    if (options.installedNca) {
+      console.log('Title: ' + title.toUpperCase());
+      prepared = await prepareInstalledNcas({ attachment, title, shouldStop });
+      const report = await saveInstalledNcaReport({ run, manifest: prepared.manifest });
+      for (const pkg of prepared.manifest.packages || []) {
+        console.log(pkg.path + ': ' + pkg.files.length + ' NCA files, ' +
+          pkg.files.reduce((total, file) => total + file.size, 0) + ' bytes');
+      }
+      console.log('NCA manifest: ' + report);
+      console.log('Download the /installed directory in your FTP client.');
+      console.log('Listing prepared; download completion must be checked in the FTP client.');
+    } else if (options.cardPartitions) {
       try {
         prepared = await prepareCardPartitions({ attachment, shouldStop });
       } catch (error) {

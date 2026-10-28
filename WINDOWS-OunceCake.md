@@ -28,7 +28,7 @@ Git clone 后必须执行此步骤；`ns2jb-host` 不包含在公开仓库中。
 1. 重启 Switch 2，打开 SmileBASIC，进入 Direct 模式，使用已保存的 NS2 bootstrap。
 2. 双击 **`NS2JB-RPC.cmd`**，选择主机能访问的**电脑局域网 IP**。按终端提示在 SmileBASIC 执行命令及本次 `V=START(...)`。`REMOVE` 每次应用进程只执行一次；失败后先重启主机再重新开始。
 3. 等待 **`RPC ready:`**。保留 RPC 窗口与 SmileBASIC。
-4. 选择所需模式：**`OUNCECAKE-START.cmd`** 显示游戏列表，输入编号；**`OUNCECAKE-CARD-PARTITIONS.cmd`** 或 **`启动卡带全分区导出.cmd`** 直接读取当前实体卡。程序自动选择宿主环境中唯一有效的 RPC 会话，等待 **`FTP up!`**。
+4. 选择所需模式：**`OUNCECAKE-START.cmd`** 显示游戏列表，输入编号；**`OUNCECAKE-CARD-PARTITIONS.cmd`** 或 **`启动卡带全分区导出.cmd`** 直接读取当前实体卡；**`OUNCECAKE-INSTALLED-NCA.cmd`** 或 **`启动内部存储NCA导出.cmd`** 显示内部存储的游戏列表，选择后导出原始 NCA。程序自动选择宿主环境中唯一有效的 RPC 会话，等待 **`FTP up!`**。
 5. FTP 客户端连接 **Switch 2 的局域网 IP，端口 2121**，使用普通 FTP、匿名登录。这里填写的是主机地址，不是电脑地址或 `127.0.0.1`。
 6. 先在 OunceCake 窗口输入 **`q`** 并回车，等待 **`Stopped`**；再在 RPC 窗口输入 **`q`** 并回车，等待清理完成。OunceCake 也支持 `quit` 和 Ctrl+C。结束使用后可重启主机。
 
@@ -63,6 +63,16 @@ Git clone 后必须执行此步骤；`ns2jb-host` 不包含在公开仓库中。
 
 卡带模式使用当前插卡路径打开逻辑文件系统，不在准备期间写入卡带。运行期间不要更换卡带。特定分区的可访问性和内容仍取决于设备环境及实体卡，详情见 [验证记录](docs/VALIDATION.md)。
 
+## 内部存储 NCA 模式
+
+保持 RPC ready，运行 `OUNCECAKE-INSTALLED-NCA.cmd` 或中文入口 `启动内部存储NCA导出.cmd`，按编号选择游戏。菜单按内部存储中的本体、更新、DLC 安装记录去重；只有更新或 DLC 的游戏也会显示。名称无法读取时按 Title ID 识别，输入 `q` 可退出选单。
+
+固定导出 Pokopia 可使用 `OUNCECAKE-POKOPIA-NCA.cmd` 或 `启动Pokopia内部存储NCA导出.cmd`。切换前先在旧 OunceCake 窗口输入 `q` 并等到 `Stopped`；保留 RPC 和 SmileBASIC。
+
+等待 `FTP up!` 后断开重连 FTP，下载 `/installed/<title-id>/`。本体、更新和 DLC 分别位于 `base/<version>`、`updates/<content-title>/<version>`、`dlc/<content-title>/<version>`。文件保留存储中的 `<ContentId>.nca` 名称，包括 Meta NCA。准备清单位于 `reports/installed-nca-*.json`，下载后按文件大小及 FTP 传输结果核对。
+
+此模式只读访问内部 User 存储中属于所选游戏的原始 NCA，不包含卡带、SD、票据、密钥或存档，也不转换为 NSP/XCI。RomFS / ExeFS 文件视图继续使用 `OUNCECAKE-START.cmd`。游戏内容若在 SD 上，此入口不会导出那部分。
+
 ## 可选命令
 
 仅检查本地运行文件与 RPC 桥接状态，不挂载游戏或启动 FTP：
@@ -81,6 +91,13 @@ node .\ouncecake.cjs --ns2jb .\ns2jb-host --base-only
 
 ```powershell
 node .\ouncecake.cjs --ns2jb .\ns2jb-host --card-partitions
+```
+
+内部存储 NCA：省略 Title ID 显示选单，提供 ID 则直接选择；不能与 `--base-only` 或 `--card-partitions` 同时使用：
+
+```powershell
+node .\ouncecake.cjs --ns2jb .\ns2jb-host --installed-nca
+node .\ouncecake.cjs --ns2jb .\ns2jb-host --installed-nca 0400A3A01EE4C000
 ```
 
 直接指定终端显示的 `Run folder`，也兼容原上游保持的 RPC 会话：
@@ -106,6 +123,8 @@ Title ID 仅为格式示例，需换成实际游戏的 ID。多个有效 RPC 会
 | `FTP up!` | FTP 已就绪，仍需用客户端下载文件，不代表导出完成。 |
 | 仍显示 `/base`、`/updates`、`/dlc` | 当前为游戏内容模式。正常停止后运行卡带入口，确认出现 `Card-partition mode`，再让 FTP 客户端断开重连。 |
 | 卡带分区状态为 `not-attempted` | 读取尚未进行；检查后续错误和报告，不能把它视作分区为空。 |
+| `No installed NCA packages` / `No installed game content` | 内部存储中没有对应的完整安装记录；确认内容是否仅在卡带或 SD 上。 |
+| `Unknown title` | 名称读取失败，仍可按显示的 Title ID 选择游戏。 |
 | 本体无 RomFS、ExeFS 为空 | 所选本体没有可下载文件；使用完整模式查看可用更新内容。 |
 | `Unsupported ns2jb ...` | 来源代码与准备工具要求的版本不匹配；需提供兼容的 Windows `ns2jb-ftp` 包。 |
 | `Memory request timed out` / `Console response timed out` | 当前会话不能视为健康；先停止 OunceCake，再按 RPC 的提示重启主机并建立新会话，不重复使用旧会话。 |
